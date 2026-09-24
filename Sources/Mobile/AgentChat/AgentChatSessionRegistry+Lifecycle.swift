@@ -93,10 +93,23 @@ extension AgentChatSessionRegistry {
             // Compaction is lifecycle telemetry. It can occur while a session
             // is idle, so it must not create a synthetic working state.
             return previous
+        case .notification where extraString(event, "notification_type") == "idle_prompt":
+            // Claude's ~60s idle nag fires even while background work from the
+            // last turn is still running. A Stop with pending work kept the
+            // session working, so the nag must not flip it to needs input.
+            if case .working = previous { return previous }
+            if case .needsInput = previous { return previous }
+            return .needsInput(since: event.receivedAt)
         case .permissionRequest, .askUserQuestion, .exitPlanMode, .notification:
             if case .needsInput = previous { return previous }
             return .needsInput(since: event.receivedAt)
         case .stop:
+            // A turn that ends with a running background task or pending cron
+            // is not idle: claude resumes on its own when the work drains.
+            if extraBool(event, "pending_background_work") == true {
+                if case .working = previous { return previous }
+                return .working(since: event.receivedAt)
+            }
             return .idle
         case .subagentStart, .subagentStop:
             // Task subagent lifecycle says nothing about the parent
@@ -105,6 +118,19 @@ extension AgentChatSessionRegistry {
         case .sessionEnd:
             return .ended
         }
+    }
+
+    private nonisolated static func extraFields(_ event: WorkstreamEvent) -> [String: Any]? {
+        guard let data = event.extraFieldsJSON?.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    private nonisolated static func extraString(_ event: WorkstreamEvent, _ key: String) -> String? {
+        extraFields(event)?[key] as? String
+    }
+
+    private nonisolated static func extraBool(_ event: WorkstreamEvent, _ key: String) -> Bool? {
+        extraFields(event)?[key] as? Bool
     }
 
     nonisolated static func stateIsEnded(_ state: ChatAgentState) -> Bool {

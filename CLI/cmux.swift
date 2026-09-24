@@ -37233,6 +37233,20 @@ export default CMUXSessionRestore;
             event["transcript_path"] = transcriptPath
         }
         if let cwd = parsedInput.cwd { event["cwd"] = cwd }
+        if source == "claude" {
+            // The session registry needs these to tell the ~60s idle_prompt
+            // nag apart from a real needs-input state: a turn that ends with
+            // background work still running is not waiting for the user.
+            if hookEventName == "Notification",
+               let notificationType = parsedInput.rawObject.flatMap({
+                   firstString(in: $0, keys: ["notification_type"])
+               }) {
+                event["notification_type"] = notificationType
+            }
+            if hookEventName == "Stop" {
+                event["pending_background_work"] = hasActiveClaudeBackgroundWork(parsedInput)
+            }
+        }
         let cursorShellCommand = source == "cursor"
             ? firstString(in: fallbackObject, keys: ["command"]).map {
                 truncate(

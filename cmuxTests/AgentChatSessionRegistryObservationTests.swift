@@ -442,6 +442,63 @@ struct AgentChatSessionRegistryObservationTests {
         #expect(AgentChatSessionRegistry.nextState(previous: .ended, event: restart) == .idle)
     }
 
+    @Test func stopWithPendingBackgroundWorkKeepsSessionWorking() {
+        let since = Date(timeIntervalSince1970: 1)
+        let stop = WorkstreamEvent(
+            sessionId: "session",
+            hookEventName: .stop,
+            source: "claude",
+            receivedAt: Date(timeIntervalSince1970: 2),
+            extraFieldsJSON: #"{"pending_background_work":true}"#
+        )
+        let idleNag = WorkstreamEvent(
+            sessionId: "session",
+            hookEventName: .notification,
+            source: "claude",
+            receivedAt: Date(timeIntervalSince1970: 62),
+            extraFieldsJSON: #"{"notification_type":"idle_prompt"}"#
+        )
+        let afterStop = AgentChatSessionRegistry.nextState(previous: .working(since: since), event: stop)
+        #expect(afterStop == .working(since: since))
+        #expect(AgentChatSessionRegistry.nextState(previous: afterStop, event: idleNag) == afterStop)
+    }
+
+    @Test func idleNagAfterSettledStopStillNeedsInput() {
+        let stop = WorkstreamEvent(
+            sessionId: "session",
+            hookEventName: .stop,
+            source: "claude",
+            extraFieldsJSON: #"{"pending_background_work":false}"#
+        )
+        let idleNag = WorkstreamEvent(
+            sessionId: "session",
+            hookEventName: .notification,
+            source: "claude",
+            receivedAt: Date(timeIntervalSince1970: 62),
+            extraFieldsJSON: #"{"notification_type":"idle_prompt"}"#
+        )
+        let afterStop = AgentChatSessionRegistry.nextState(previous: .working(since: Date()), event: stop)
+        #expect(afterStop == .idle)
+        #expect(
+            AgentChatSessionRegistry.nextState(previous: afterStop, event: idleNag)
+                == .needsInput(since: Date(timeIntervalSince1970: 62))
+        )
+    }
+
+    @Test func permissionNotificationStillNeedsInputWhileWorking() {
+        let prompt = WorkstreamEvent(
+            sessionId: "session",
+            hookEventName: .notification,
+            source: "claude",
+            receivedAt: Date(timeIntervalSince1970: 5),
+            extraFieldsJSON: #"{"notification_type":"permission_prompt"}"#
+        )
+        #expect(
+            AgentChatSessionRegistry.nextState(previous: .working(since: Date()), event: prompt)
+                == .needsInput(since: Date(timeIntervalSince1970: 5))
+        )
+    }
+
     @Test func mobileChatObserverSkipsUnambiguousNonAgentWithoutReadingDetails() {
         let workspaceID = UUID()
         let surfaceID = UUID()
