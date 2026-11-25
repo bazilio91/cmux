@@ -5,6 +5,36 @@ import CmuxTerminalCore
 import Foundation
 
 /// Owns remote click downloads and discards completions whose source terminal has changed.
+/// The connection a remote Cmd-click download uses: managed SSH's fields, or
+/// a remote tmux mirror's ControlPath master (see
+/// `Workspace.remoteTerminalFilePreviewConnection(for:)`).
+struct RemoteTerminalFilePreviewConnection: Equatable {
+    let connection: SSHFileExplorerConnection
+    let displayTarget: String
+    /// The whole managed configuration, so the completion guard still discards
+    /// a download when any of it changed, exactly as before mirror routes.
+    let managedConfiguration: WorkspaceRemoteConfiguration?
+
+    init(configuration: WorkspaceRemoteConfiguration) {
+        connection = SSHFileExplorerConnection(
+            destination: configuration.destination, port: configuration.port,
+            identityFile: configuration.identityFile, sshOptions: configuration.fileOperationSSHOptions
+        )
+        displayTarget = configuration.displayTarget
+        managedConfiguration = configuration
+    }
+
+    /// The mirror's master, exactly as the Files root reuses it.
+    init(mirrorHost host: RemoteTmuxHost) {
+        connection = SSHFileExplorerConnection(
+            destination: host.destination, port: host.port, identityFile: host.identityFile,
+            sshOptions: ["ControlPath=\(host.controlSocketPath)"]
+        )
+        displayTarget = host.destination
+        managedConfiguration = nil
+    }
+}
+
 @MainActor
 final class RemoteTerminalFilePreviewCoordinator {
     private let defaults: UserDefaults
@@ -32,8 +62,8 @@ final class RemoteTerminalFilePreviewCoordinator {
     func open(workspace: Workspace, sourcePanelID: UUID, tokens: [String]) -> Bool {
         let tokens = tokens.filter { RemoteTerminalPathResolver().isFileReference($0) }
         guard !tokens.isEmpty,
-              let configuration = workspace.remoteTerminalFilePreviewConfiguration(for: sourcePanelID),
-              let panel = workspace.terminalPanel(for: sourcePanelID) else { return false }
+              let route = workspace.remoteTerminalFilePreviewConnection(for: sourcePanelID),
+              let panel = workspace.remoteFilePreviewTerminalPanel(for: sourcePanelID) else { return false }
         tasks[sourcePanelID]?.task.cancel()
         let settings = FileRouteSettingsStore(defaults: defaults)
         guard !ManagedFileTransferPolicy.isDisabled,
@@ -43,11 +73,11 @@ final class RemoteTerminalFilePreviewCoordinator {
         }
         let directory = workspace.effectivePanelDirectory(panelId: sourcePanelID)
         let provider = SSHFileExplorerProvider(
-            destination: configuration.destination,
-            port: configuration.port,
-            identityFile: configuration.identityFile,
-            sshOptions: configuration.fileOperationSSHOptions,
-            displayTarget: configuration.displayTarget,
+            destination: route.connection.destination,
+            port: route.connection.port,
+            identityFile: route.connection.identityFile,
+            sshOptions: route.connection.sshOptions,
+            displayTarget: route.displayTarget,
             homePath: "",
             isAvailable: true,
             transport: transport
@@ -89,8 +119,8 @@ final class RemoteTerminalFilePreviewCoordinator {
                 guard let self, let workspace, let panel, let sourceSurface,
                       !ManagedFileTransferPolicy.isDisabled,
                       !workspace.isRetiredFromOwningTabManager,
-                      workspace.remoteTerminalFilePreviewConfiguration(for: sourcePanelID) == configuration,
-                      workspace.terminalPanel(for: sourcePanelID) === panel,
+                      workspace.remoteTerminalFilePreviewConnection(for: sourcePanelID) == route,
+                      workspace.remoteFilePreviewTerminalPanel(for: sourcePanelID) === panel,
                       panel.surface === sourceSurface,
                       sourceSurface.terminalLifecycleId == lifecycleID,
                       workspace.remoteTerminalAttemptIDsBySurfaceId[sourcePanelID] == attemptID,
@@ -98,7 +128,7 @@ final class RemoteTerminalFilePreviewCoordinator {
                       SurfaceCatalog.shared.projectionIncludingPendingRestore(forPanel: sourcePanelID)?.resource == projectionResource,
                       sourceSurface.owningWorkspace() === workspace,
                       workspace.owningTabManager?.selectedTabId == workspace.id,
-                      workspace.focusedPanelId == sourcePanelID,
+                      workspace.isFocusedTerminalSurface(sourcePanelID),
                       panel.hostedView.window?.isKeyWindow == true else {
                     #if DEBUG
                     cmuxDebugLog("remotePreview.discarded request=\(requestID.uuidString)")
@@ -120,11 +150,11 @@ final class RemoteTerminalFilePreviewCoordinator {
                 cmuxDebugLog("remotePreview.failed request=\(requestID.uuidString)")
                 #endif
                 guard let workspace, let panel,
-                      workspace.remoteTerminalFilePreviewConfiguration(for: sourcePanelID) == configuration,
+                      workspace.remoteTerminalFilePreviewConnection(for: sourcePanelID) == route,
                       workspace.sshTuiConnectionAttemptID == tuiAttemptID,
-                      workspace.terminalPanel(for: sourcePanelID) === panel,
+                      workspace.remoteFilePreviewTerminalPanel(for: sourcePanelID) === panel,
                       workspace.owningTabManager?.selectedTabId == workspace.id,
-                      workspace.focusedPanelId == sourcePanelID,
+                      workspace.isFocusedTerminalSurface(sourcePanelID),
                       panel.hostedView.window?.isKeyWindow == true else { return }
                 // Match the existing file-explorer preview failure affordance without exposing SSH diagnostics.
                 NSSound.beep()
