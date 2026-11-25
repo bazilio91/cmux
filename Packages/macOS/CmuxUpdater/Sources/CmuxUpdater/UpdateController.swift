@@ -76,7 +76,8 @@ public final class UpdateController {
     ///   - fileManager: Filesystem access for the Sparkle installation-cache workaround;
     ///     injectable so tests can avoid touching the real filesystem.
     ///   - isDevLikeBundle: Overrides whether this is a DEV/staging build. Defaults to `nil`,
-    ///     which derives it from `hostBundle.bundleIdentifier` via ``isDevLikeBundleIdentifier(_:)``.
+    ///     which derives it from `hostBundle.bundleIdentifier` via ``isDevLikeBundleIdentifier(_:)``,
+    ///     or from ``disablesUpdates(infoDictionary:)`` on `hostBundle`'s Info.plist.
     ///     Injectable because a `Bundle` with an arbitrary identifier cannot be constructed in tests.
     /// - Parameter isDisabledByPolicy: The host's `DisableAutoUpdate` managed
     ///   policy. While it returns true the updater is never started and manual
@@ -129,7 +130,9 @@ public final class UpdateController {
         self.defaults = defaults
         self.fileManager = fileManager
         self.hostBundle = hostBundle
-        let isDevLikeBundle = isDevLikeBundle ?? Self.isDevLikeBundleIdentifier(hostBundle.bundleIdentifier)
+        let isDevLikeBundle = isDevLikeBundle
+            ?? (Self.isDevLikeBundleIdentifier(hostBundle.bundleIdentifier)
+                || Self.disablesUpdates(infoDictionary: hostBundle.infoDictionary))
         self.isDevLikeBundle = isDevLikeBundle
         settings.apply(to: defaults)
         if isDevLikeBundle {
@@ -396,6 +399,17 @@ extension UpdateController {
     /// `isStagingBundleIdentifier` (in the CmuxSettings package). The classification is
     /// duplicated here deliberately to avoid introducing a `CmuxUpdater → CmuxSettings` package
     /// dependency edge for a small string check.
+    /// The Info.plist key a build sets to `true` to be treated like a DEV/staging build by the
+    /// updater: no automatic checks and manual checks suppressed. roma's fork (bazilio91/cmux,
+    /// branch `roma/mirror-files`) ships under the public bundle id with this key, so an upstream
+    /// release can never replace it.
+    static let disableUpdatesInfoKey = "CMUXDisableUpdates"
+
+    /// True when `infoDictionary` sets ``disableUpdatesInfoKey`` to a boolean `true`.
+    static func disablesUpdates(infoDictionary: [String: Any]?) -> Bool {
+        (infoDictionary?[disableUpdatesInfoKey] as? Bool) == true
+    }
+
     static func isDevLikeBundleIdentifier(_ bundleIdentifier: String?) -> Bool {
         guard let bundleIdentifier else { return false }
         return bundleIdentifier == "com.cmuxterm.app.debug"

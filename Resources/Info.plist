@@ -293,6 +293,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>CMUXDisableUpdates</key>
+	<true/>
 	<key>OSAScriptingDefinition</key>
 	<string>cmux.sdef</string>
 	<key>SUAutomaticallyUpdate</key>

@@ -143,6 +143,66 @@ import Testing
         #expect(defaults.bool(forKey: UpdateSettings.automaticChecksKey) == true)
     }
 
+    /// roma's fork (bazilio91/cmux) ships under the public bundle id with
+    /// `CMUXDisableUpdates = true` in its Info.plist, so the first upstream
+    /// release can never replace it: the key makes the bundle dev-like.
+    @Test func disableUpdatesInfoKeyMakesTheBundleDevLike() {
+        #expect(UpdateController.disablesUpdates(infoDictionary: ["CMUXDisableUpdates": true]))
+        #expect(UpdateController.disablesUpdates(infoDictionary: ["CMUXDisableUpdates": NSNumber(value: true)]))
+        #expect(!UpdateController.disablesUpdates(infoDictionary: ["CMUXDisableUpdates": false]))
+        #expect(!UpdateController.disablesUpdates(infoDictionary: ["CMUXDisableUpdates": "YES"]))
+        #expect(!UpdateController.disablesUpdates(infoDictionary: [:]))
+        #expect(!UpdateController.disablesUpdates(infoDictionary: nil))
+    }
+
+    @Test func disableUpdatesBundleTurnsOffAutomaticChecksAndManualChecks() throws {
+        let suiteName = "com.cmuxterm.updatertests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let bundle = try makeBundle(info: ["CFBundleIdentifier": "com.cmuxterm.app", "CMUXDisableUpdates": true])
+
+        let controller = UpdateController(
+            log: NoopUpdateLog(),
+            clock: SystemUpdateClock(),
+            hostBundle: bundle,
+            defaults: defaults
+        )
+        #expect(controller.isDevLikeBundle)
+        #expect(defaults.bool(forKey: UpdateSettings.automaticChecksKey) == false)
+        controller.checkForUpdates()
+        guard case .notFound = controller.model.state else {
+            Issue.record("CMUXDisableUpdates manual check should surface .notFound, got \(controller.model.state)")
+            return
+        }
+    }
+
+    @Test func publicBundleWithoutTheKeyIsNotDevLike() throws {
+        let suiteName = "com.cmuxterm.updatertests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let bundle = try makeBundle(info: ["CFBundleIdentifier": "com.cmuxterm.app"])
+
+        let controller = UpdateController(
+            log: NoopUpdateLog(),
+            clock: SystemUpdateClock(),
+            hostBundle: bundle,
+            defaults: defaults
+        )
+        #expect(!controller.isDevLikeBundle)
+        #expect(defaults.bool(forKey: UpdateSettings.automaticChecksKey) == true)
+    }
+
+    /// A throwaway `.bundle` on disk with the given Info.plist (nested helper, not API).
+    private func makeBundle(info: [String: Any]) throws -> Bundle {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cmux-updater-\(UUID().uuidString).bundle")
+        let contents = dir.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+        return try #require(Bundle(url: dir))
+    }
+
     /// Builds a minimal valid `SUAppcastItem` for a version string (nested helper, not API).
     private func makeAppcastItem(version: String) -> SUAppcastItem? {
         let enclosure: [String: Any] = [
